@@ -1,0 +1,181 @@
+import asyncio
+import random
+from pathlib import Path
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    FSInputFile,
+    Message,
+)
+
+# Вставьте сюда токен вашего бота от @BotFather
+TOKEN = "8804606393:AAG9a0Bu7czVNNjeXsRi7sI66u5K0AuIrhg"
+
+# Уровни жесткости: 1 - Разогрев, 2 - Жарко, 3 - Без цензуры (10/10)
+TRUTH = {
+    1: [
+        "Какая моя деталь гардероба заводит тебя сильнее всего, когда мы на расстоянии?",
+        "О чём пошлом ты думал(а), когда мы последний раз созванивались по видео?",
+        "Какое сообщение от меня заставило тебя улыбнуться и тут же отвлечься от дел?",
+    ],
+    2: [
+        "В какой позе ты хочешь прижать меня к стене, когда мы наконец увидимся?",
+        "Какую самую откровенную фантазию обо мне ты скрываешь?",
+        "Если бы я оказалась/оказался в твоей комнате в одной ночной сорочке, что бы ты сделал(а) в первую минуту?",
+    ],
+    3: [
+        "Опиши в мельчайших грязных деталях, что именно мы сделаем в первые 10 минут нашей встречи без одежды.",
+        "Какое самое жесткое и доминирующее слово я могу сказать тебе на ухо, чтобы ты потерял(а) контроль?",
+        "Какую самую запретную фантазию ты хочешь воплотить со мной, но боялся/боялась озвучить?",
+    ],
+}
+
+DARE = {
+    1: [
+        "📷 Сделай селфи своей комнаты (или себя) с таймером на 3 секунды и отправь партнёру.",
+        "🎙 Запиши голосовое длиной 10 секунд только со своим учащенным дыханием.",
+        "Напиши ровно три слова о том, что ты сделаешь со мной в первую ночь после встречи.",
+    ],
+    2: [
+        "📷 Сделай фото своего силуэта или силуэта в зеркале в полумраке (сгорающее по таймеру).",
+        "🎙 Запиши голосовое шепотом: скажи самую пошлую вещь, о которой ты думаешь прямо сейчас.",
+        "Пришли скриншот своих последних мыслей или вкладки, о которой никому не расскажешь.",
+    ],
+    3: [
+        "🎙 Запиши жесткое голосовое-приказ: четко и без цензуры укажи, в какой позе я буду встречать тебя на пороге.",
+        "📷 Сделай максимально откровенное фото детали своего тела/белья по жесткому ракурсу и отправь на 3 секунды.",
+        "Выдай ультиматум: напиши условие, которое я обязана/обязан буду выполнить беспрекословно при встрече за любой косяк.",
+    ],
+}
+
+NEVER = {
+    1: [
+        "Я никогда не фантазировал(а) о незнакомце на улице.",
+        "Я никогда не отправлял(а) пикантные фото не тому контакту.",
+        "Я никогда не мастурбировал(а), думая о нашем видеозвонке.",
+    ],
+    2: [
+        "Я никогда не хотел(а) заняться сексом в общественном месте так, чтобы нас чуть не поймали.",
+        "Я никогда не использовал(а) подручные вещи вместо игрушек.",
+        "Я никогда не просил(а) партнера сделать что-то экстремальное в постели.",
+    ],
+    3: [
+        "Я никогда не пробовал(а) жесткие ролевые игры с полным подчинением.",
+        "Я никогда не снимал(а) наш секс на видео для себя.",
+        "Я никогда не уходил(а) в полный отрыв наедине с человеком за одну ночь.",
+    ],
+}
+
+MODES = {
+    "truth": ("🔥 Пикантная правда", TRUTH),
+    "dare": ("⚡ Жесткое действие", DARE),
+    "never": ("🔞 Я никогда не...", NEVER),
+}
+LEVEL_NAMES = {1: "Разогрев", 2: "Жарко", 3: "10/10 (Без цензуры)"}
+
+# По умолчанию ставим максимальный уровень (3) для каждой сессии
+levels: dict[int, int] = {}
+
+dp = Dispatcher()
+
+
+def main_kb(chat_id: int) -> InlineKeyboardMarkup:
+    lvl = levels.get(chat_id, 3)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔥 Правда", callback_data="play:truth"),
+                InlineKeyboardButton(text="⚡ Действие", callback_data="play:dare"),
+            ],
+            [
+                InlineKeyboardButton(text="🔞 Я никогда не...", callback_data="play:never"),
+                InlineKeyboardButton(text="🌹 Позы", callback_data="pose"),
+            ],
+            [InlineKeyboardButton(text=f"🎚 Уровень: {LEVEL_NAMES[lvl]}", callback_data="level")],
+        ]
+    )
+
+
+def card_kb(mode: str) -> InlineKeyboardMarkup:
+    skip = "pose" if mode == "pose_next" else f"play:{mode}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⏭ Другое", callback_data=skip),
+                InlineKeyboardButton(text="☰ Меню", callback_data="menu"),
+            ]
+        ]
+    )
+
+
+BANNER = Path(__file__).parent / "banner.png"
+WELCOME = (
+    "<b>🔥 Жесткая игра 10/10 для двоих на расстоянии</b>\n"
+    "Никаких пресностей. Играйте на максимум.\n\n"
+    "Выберите режим 👇"
+)
+
+
+@dp.message(Command("start"))
+async def start(message: Message):
+    levels.setdefault(message.chat.id, 3)  # Сразу включаем самый жесткий уровень
+    kb = main_kb(message.chat.id)
+    if BANNER.exists():
+        await message.answer_photo(FSInputFile(BANNER), caption=WELCOME, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.answer(WELCOME, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "menu")
+async def menu(call: CallbackQuery):
+    await call.message.answer("Выберите режим 👇", reply_markup=main_kb(call.message.chat.id))
+    await call.answer()
+
+
+@dp.callback_query(F.data == "level")
+async def change_level(call: CallbackQuery):
+    chat_id = call.message.chat.id
+    levels[chat_id] = levels.get(chat_id, 3) % 3 + 1
+    await call.message.edit_reply_markup(reply_markup=main_kb(chat_id))
+    await call.answer(f"Уровень: {LEVEL_NAMES[levels[chat_id]]}")
+
+
+@dp.callback_query(F.data.startswith("play:"))
+async def play(call: CallbackQuery):
+    mode = call.data.split(":")[1]
+    title, pool = MODES[mode]
+    lvl = levels.get(call.message.chat.id, 3)
+    text = random.choice(pool[lvl])
+    await call.message.answer(
+        f"<b>{title}</b> · {LEVEL_NAMES[lvl]}\n\n{text}", reply_markup=card_kb(mode), parse_mode="HTML"
+    )
+    await call.answer()
+
+
+POSES_DIR = Path(__file__).parent / "poses"
+IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+@dp.callback_query(F.data == "pose")
+async def pose(call: CallbackQuery):
+    files = [f for f in POSES_DIR.glob("*") if f.suffix.lower() in IMG_EXT] if POSES_DIR.exists() else []
+    if not files:
+        await call.message.answer("Папка poses пуста. Можете закинуть туда фото.")
+        await call.answer()
+        return
+    f = random.choice(files)
+    await call.message.answer_photo(FSInputFile(f), caption=f.stem, reply_markup=card_kb("pose_next"))
+    await call.answer()
+
+
+async def main():
+    bot = Bot(TOKEN)
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
